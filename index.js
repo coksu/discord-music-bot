@@ -42,6 +42,36 @@ const loadBot = async () => {
     await player.extractors.loadMulti(DefaultExtractors);
     client.player = player;
 
+    // --- Tambahkan ini untuk menangani event error discord-player ---
+    player.events.on('error', (queue, error) => {
+        console.error(`Error dari antrian ${queue.guild.name}:`, error);
+        queue.metadata.channel.send(`Terjadi kesalahan dengan antrian musik: ${error.message}`);
+    });
+
+    player.events.on('playerError', (queue, error) => {
+        console.error(`Player error dari antrian ${queue.guild.name}:`, error);
+        queue.metadata.channel.send(`Terjadi kesalahan pada player: ${error.message}`);
+    });
+
+    player.events.on('audioTrackAdd', (queue, track) => {
+        queue.metadata.channel.send(`🎶 **${track.title}** telah ditambahkan ke antrian.`);
+    });
+
+    player.events.on('playerStart', (queue, track) => {
+        queue.metadata.channel.send(`▶️ Mulai memutar: **${track.title}**`);
+    });
+
+    player.events.on('emptyChannel', (queue) => {
+        queue.metadata.channel.send('Tidak ada lagi di channel suara, aku pergi sekarang.');
+        queue.delete();
+    });
+
+    player.events.on('emptyQueue', (queue) => {
+        queue.metadata.channel.send('Antrian kosong, selesai memutar.');
+        queue.delete();
+    });
+    // --- Akhir penambahan ---
+
     client.once('ready', () => {
         console.log(`✅ Bot aktif sebagai ${client.user.tag}`);
     });

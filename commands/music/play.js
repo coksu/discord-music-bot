@@ -1,5 +1,3 @@
-// commands/music/play.js
-
 const { ActionRowBuilder, StringSelectMenuBuilder, EmbedBuilder } = require('discord.js');
 const { QueryType } = require('discord-player');
 
