@@ -1,103 +1,140 @@
 // index.js
 
-global.crypto = require('crypto');
+global.crypto = require("crypto")
 
-const { Client, GatewayIntentBits, Collection, Partials } = require('discord.js');
-const { Player } = require('discord-player');
-const { DefaultExtractors } = require('@discord-player/extractor');
-const fs = require('fs');
-require('dotenv').config();
+const { Client, GatewayIntentBits, Collection, Partials } = require("discord.js")
+const { Player } = require("discord-player")
+const { YoutubeiExtractor } = require("discord-player-youtubei")
+const fs = require("fs")
+const path = require("path")
+require("dotenv").config()
 
 const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildVoiceStates,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
-    ],
-    partials: [Partials.Channel]
-});
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
+  partials: [Partials.Channel],
+})
 
-client.commands = new Collection();
+client.commands = new Collection()
 
 const loadBot = async () => {
-    const commandFolders = fs.readdirSync('./commands');
-    for (const folder of commandFolders) {
-        const folderPath = `./commands/${folder}`;
-        if (!fs.lstatSync(folderPath).isDirectory()) continue;
+  // Load slash commands
+  const commandsPath = path.join(__dirname, "commands")
+  const commandFolders = fs.readdirSync(commandsPath)
 
-        const commandFiles = fs
-            .readdirSync(folderPath)
-            .filter(file => file.endsWith('.js'));
+  for (const folder of commandFolders) {
+    const folderPath = path.join(commandsPath, folder)
+    if (!fs.lstatSync(folderPath).isDirectory()) continue
 
-        for (const file of commandFiles) {
-            const command = require(`${folderPath}/${file}`);
-            if (command.name && typeof command.execute === 'function') {
-                client.commands.set(command.name, command);
-            }
-        }
+    const commandFiles = fs.readdirSync(folderPath).filter((file) => file.endsWith(".js"))
+
+    for (const file of commandFiles) {
+      const filePath = path.join(folderPath, file)
+      const command = require(filePath)
+
+      if ("data" in command && "execute" in command) {
+        client.commands.set(command.data.name, command)
+        console.log(`✅ Loaded command: ${command.data.name}`)
+      } else {
+        console.log(`⚠️ Command at ${filePath} is missing "data" or "execute" property.`)
+      }
+    }
+  }
+
+  // Initialize discord-player
+  const player = new Player(client, {
+    ytdlOptions: {
+      quality: "highestaudio",
+      highWaterMark: 1 << 25,
+    },
+  })
+
+  // Load YouTube extractor
+  try {
+    await player.extractors.register(YoutubeiExtractor, {})
+    console.log("✅ YouTube extractor loaded successfully")
+  } catch (error) {
+    console.log("⚠️ Error loading YouTube extractor:", error.message)
+    // Fallback to default extractors
+    try {
+      await player.extractors.loadDefault()
+      console.log("✅ Default extractors loaded as fallback")
+    } catch (fallbackError) {
+      console.log("❌ Failed to load any extractors:", fallbackError.message)
+    }
+  }
+
+  client.player = player
+
+  // Player event handlers
+  player.events.on("error", (queue, error) => {
+    console.error(`❌ Queue error in ${queue.guild.name}:`, error)
+    if (queue.metadata && queue.metadata.channel) {
+      queue.metadata.channel.send(`❌ Terjadi kesalahan: ${error.message}`)
+    }
+  })
+
+  player.events.on("playerError", (queue, error) => {
+    console.error(`❌ Player error in ${queue.guild.name}:`, error)
+    if (queue.metadata && queue.metadata.channel) {
+      queue.metadata.channel.send(`❌ Error saat memutar: ${error.message}`)
+    }
+  })
+
+  player.events.on("playerStart", (queue, track) => {
+    console.log(`▶️ Started playing: ${track.title}`)
+    if (queue.metadata && queue.metadata.channel) {
+      queue.metadata.channel.send(`▶️ Mulai memutar: **${track.title}**`)
+    }
+  })
+
+  player.events.on("emptyChannel", (queue) => {
+    console.log(`👋 Left empty channel in ${queue.guild.name}`)
+    queue.delete()
+  })
+
+  player.events.on("emptyQueue", (queue) => {
+    console.log(`📭 Queue finished in ${queue.guild.name}`)
+    queue.delete()
+  })
+
+  client.once("ready", () => {
+    console.log(`✅ Bot ready as ${client.user.tag}`)
+    console.log(`📊 Loaded ${client.commands.size} slash commands`)
+    console.log(`🎵 Discord-player version: ${require("discord-player/package.json").version}`)
+  })
+
+  // Handle slash command interactions
+  client.on("interactionCreate", async (interaction) => {
+    if (!interaction.isChatInputCommand()) return
+
+    const command = client.commands.get(interaction.commandName)
+
+    if (!command) {
+      console.error(`No command matching ${interaction.commandName} was found.`)
+      return
     }
 
-    const player = new Player(client);
-    await player.extractors.loadMulti(DefaultExtractors);
-    client.player = player;
+    try {
+      await command.execute(interaction, client.player)
+    } catch (error) {
+      console.error(`Error executing ${interaction.commandName}:`, error)
 
-    // --- Tambahkan ini untuk menangani event error discord-player ---
-    player.events.on('error', (queue, error) => {
-        console.error(`Error dari antrian ${queue.guild.name}:`, error);
-        queue.metadata.channel.send(`Terjadi kesalahan dengan antrian musik: ${error.message}`);
-    });
+      const errorMessage = "❌ Terjadi kesalahan saat menjalankan command!"
 
-    player.events.on('playerError', (queue, error) => {
-        console.error(`Player error dari antrian ${queue.guild.name}:`, error);
-        queue.metadata.channel.send(`Terjadi kesalahan pada player: ${error.message}`);
-    });
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({ content: errorMessage, ephemeral: true })
+      } else {
+        await interaction.reply({ content: errorMessage, ephemeral: true })
+      }
+    }
+  })
 
-    player.events.on('audioTrackAdd', (queue, track) => {
-        queue.metadata.channel.send(`🎶 **${track.title}** telah ditambahkan ke antrian.`);
-    });
+  client.login(process.env.TOKEN)
+}
 
-    player.events.on('playerStart', (queue, track) => {
-        queue.metadata.channel.send(`▶️ Mulai memutar: **${track.title}**`);
-    });
-
-    player.events.on('emptyChannel', (queue) => {
-        queue.metadata.channel.send('Tidak ada lagi di channel suara, aku pergi sekarang.');
-        queue.delete();
-    });
-
-    player.events.on('emptyQueue', (queue) => {
-        queue.metadata.channel.send('Antrian kosong, selesai memutar.');
-        queue.delete();
-    });
-    // --- Akhir penambahan ---
-
-    client.once('ready', () => {
-        console.log(`✅ Bot aktif sebagai ${client.user.tag}`);
-    });
-
-    client.on('messageCreate', async message => {
-        if (message.author.bot || !message.guild) return;
-        if (!message.content.startsWith(process.env.PREFIX)) return;
-
-        const args = message.content
-            .slice(process.env.PREFIX.length)
-            .trim()
-            .split(/ +/);
-        const cmdName = args.shift().toLowerCase();
-
-        const command = client.commands.get(cmdName);
-        if (!command) return;
-
-        try {
-            await command.execute(message, args, client, player);
-        } catch (err) {
-            console.error(err);
-            message.reply('❌ Terjadi error saat menjalankan command.');
-        }
-    });
-
-    client.login(process.env.TOKEN);
-};
-
-loadBot();
+loadBot()
